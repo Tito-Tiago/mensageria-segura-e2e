@@ -6,3 +6,4 @@ certs/*.key
 certs/*.crt
 *.log
 output/
+/trabalho-pratico-3.pdf
