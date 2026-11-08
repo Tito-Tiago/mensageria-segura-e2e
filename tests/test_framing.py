@@ -46,3 +46,12 @@ def test_versao_e_tipo():
     for invalid in [b'', b'\x02\x01', b'\x01\xff']:
         with pytest.raises(ProtocolError):
             unpack(invalid)
+
+
+async def test_ociosidade_nao_e_frame_incompleto():
+    reader = asyncio.StreamReader()
+    task = asyncio.create_task(read_frame(reader, timeout=0.01))
+    await asyncio.sleep(0.03)
+    assert not task.done()
+    reader.feed_data(struct.pack('!I', 2) + b'ok')
+    assert await task == b'ok'

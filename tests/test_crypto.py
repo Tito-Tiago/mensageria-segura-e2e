@@ -88,3 +88,32 @@ def test_terceiro_cliente_nao_decifra(pair):
                        public_bytes(X25519PrivateKey.generate()), os.urandom(16))
     with pytest.raises(ProtocolError, match='tag'):
         c.decrypt_message(a.encrypt_message(b'so B'))
+
+
+def test_vetor_publico_rfc7748_e_labels_hkdf():
+    # Vetores públicos de teste, NÃO são chaves de clientes ou da demonstração.
+    # Fonte: https://www.rfc-editor.org/rfc/rfc7748.html#section-6.1
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from src.client.crypto import derive_peer_keys
+    a = X25519PrivateKey.from_private_bytes(bytes.fromhex(
+        '77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a'))
+    bp = bytes.fromhex('de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f')
+    z = bytes.fromhex('4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742')
+    aid = uuid.UUID('00000000-0000-4000-8000-000000000001').bytes
+    bid = uuid.UUID('00000000-0000-4000-8000-000000000002').bytes
+    salt = bytes(range(16))
+    send, recv = derive_peer_keys(a, aid, bid, bp, salt)
+    # API HKDF completa como referência, independente da composição Extract/Expand usada no projeto.
+    assert send == HKDF(algorithm=hashes.SHA256(), length=16, salt=salt, info=b'A2B').derive(z)
+    assert recv == HKDF(algorithm=hashes.SHA256(), length=16, salt=salt, info=b'B2A').derive(z)
+
+
+def test_iv_nao_muda_apos_primeiro_frame_autenticado(pair):
+    a, b = pair
+    b.decrypt_message(a.encrypt_message(b'primeira'))
+    original = a.iv_send
+    a.iv_send = bytes([original[0] ^ 1]) + original[1:]
+    with pytest.raises(ProtocolError, match='IV'):
+        b.decrypt_message(a.encrypt_message(b'prefixo alterado'))
+    assert b.seq_recv == 0 and b.iv_recv == original
