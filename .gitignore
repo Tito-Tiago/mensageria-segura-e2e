@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+certs/*.key
+certs/*.crt
+*.log
+output/
