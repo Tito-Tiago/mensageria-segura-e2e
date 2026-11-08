@@ -120,7 +120,7 @@ sequenceDiagram
     Note over A,B: X25519 + HKDF: duas chaves E2E
     A->>S: Frame AES-GCM com IDs, nonce e contador
     S->>B: Mesmo frame cifrado
-    Note over B: Valida contador, IDs, nonce e tag; decifra
+    Note over B: Valida contador, IDs, nonce e tag#59; decifra
 ```
 
 ## Garantias e limites
