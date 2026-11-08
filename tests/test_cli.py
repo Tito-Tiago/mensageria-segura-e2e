@@ -64,3 +64,28 @@ async def test_cli_sai_ao_servidor_cair_sem_esperar_stdin(cli_system):
     await asyncio.wait_for(proc.wait(), 5)
     assert proc.returncode == 0
     assert b'Cliente encerrado.' in await proc.stdout.read()
+
+
+async def test_servidor_cli_ctrl_c_com_cliente_ativo(tmp_path):
+    import signal
+    identity = ServerIdentity.generate()
+    key, cert = tmp_path / 'server.key', tmp_path / 'server.crt'
+    identity.save(key, cert)
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, '-m', 'src.server.main', '--port', '0', '--key', str(key), '--cert', str(cert),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    peer = SecureClient()
+    try:
+        line = await asyncio.wait_for(proc.stdout.readline(), 5)
+        port = int(line.decode().split(':')[1].split('.')[0])
+        await peer.connect('127.0.0.1', port, identity.certificate)
+        proc.send_signal(signal.SIGINT)
+        await asyncio.wait_for(proc.wait(), 5)
+        await asyncio.wait_for(peer.closed.wait(), 5)
+        assert proc.returncode == 0
+        assert b'Traceback' not in await proc.stderr.read()
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+        await peer.close()

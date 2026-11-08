@@ -158,8 +158,9 @@ async def run(args):
     port = await server.start(args.host, args.port)
     print(f'Servidor relay em {args.host}:{port}. Limite: {args.max_clients} clientes.', flush=True)
     try:
-        async with server.listener:
-            await server.listener.serve_forever()
+        # start_server já está aceitando conexões. Esperar aqui permite que nosso
+        # finally feche os clientes antes de wait_closed, inclusive ao receber Ctrl+C.
+        await asyncio.Future()
     finally:
         await server.close()
 
