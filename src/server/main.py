@@ -46,11 +46,14 @@ class RelayServer:
     async def close(self):
         if self.listener:
             self.listener.close()
-            await self.listener.wait_closed()
         for writer in list(self.connections):
             writer.close()
         if self.tasks:
             await asyncio.gather(*list(self.tasks), return_exceptions=True)
+        # Em Python 3.12+, wait_closed também aguarda transportes ativos.
+        # Fechá-los antes evita bloquear o encerramento com clientes conectados.
+        if self.listener:
+            await self.listener.wait_closed()
 
     async def send_control(self, session, kind, data):
         # O lock engloba reservar contador, assinar e escrever, preservando a ordem.
