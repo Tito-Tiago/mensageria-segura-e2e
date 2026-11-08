@@ -119,7 +119,7 @@ O servidor confere que o remetente do E2E pertence ao socket e encaminha o mesmo
 
 Na saída, o servidor remove a sessão e envia LEFT autenticado. Os clientes removem o estado do peer. Reconectar com o mesmo UUID requer novo par X25519, handshake e salts de pares; frames antigos deixam de autenticar. UUID ainda ativo é recusado sem remover o original.
 
-Ao encerrar o servidor, primeiro fechar o listener para novas conexões e os sockets ativos, aguardar os handlers e só então esperar o listener terminar. Essa ordem evita bloquear `wait_closed` no Python 3.12 com transportes ativos. A CLI usa entrada assíncrona para sair se o servidor cair mesmo quando ninguém pressiona Enter.
+Ao encerrar o servidor, primeiro fechar o listener para novas conexões e abortar os transportes ativos, aguardar os handlers e só então esperar o listener terminar. Abortar descarta dados pendentes: o encerramento não promete sua entrega. Somente chamar `close` pode bloquear esperando um destinatário que não lê. Falhas de escrita e de notificação também abortam o transporte; no fechamento normal de um handler, `wait_closed` tem prazo de 10 segundos e aborta ao excedê-lo. A conexão permanece rastreada até terminar essa limpeza. Essa ordem evita bloquear `wait_closed` no Python 3.12 com transportes ativos. A CLI usa entrada assíncrona para sair se o servidor cair mesmo quando ninguém pressiona Enter.
 
 O cliente pode continuar após rejeitar um E2E adulterado/repetido. Controle inválido é falha de autenticação do canal administrativo e encerra a conexão. Tamanho inválido encerra somente a conexão ofensora.
 

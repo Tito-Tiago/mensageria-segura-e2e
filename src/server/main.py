@@ -38,16 +38,20 @@ class RelayServer:
         self.connections = set()
         self.tasks = set()
         self.listener = None
+        self.closing = False
 
     async def start(self, host='127.0.0.1', port=8888):
         self.listener = await asyncio.start_server(self.handle, host, port)
         return self.listener.sockets[0].getsockname()[1]
 
     async def close(self):
+        self.closing = True
         if self.listener:
             self.listener.close()
         for writer in list(self.connections):
-            writer.close()
+            # close() tenta escoar o buffer e pode nunca concluir se o peer não lê.
+            # No encerramento do relay não há garantia de entrega pendente.
+            writer.transport.abort()
         if self.tasks:
             await asyncio.gather(*list(self.tasks), return_exceptions=True)
         # Em Python 3.12+, wait_closed também aguarda transportes ativos.
@@ -67,7 +71,7 @@ class RelayServer:
         try:
             await self.send_control(session, kind, data)
         except (ConnectionError, OSError, TimeoutError, ProtocolError):
-            session.writer.close()
+            session.writer.transport.abort()
 
     async def register(self, reader, writer):
         body = await asyncio.wait_for(read_frame(reader), FRAME_TIMEOUT)
@@ -110,10 +114,13 @@ class RelayServer:
             await write_frame(peer.writer, pack(Kind.E2E, payload), peer.write_lock)
             LOG.info('encaminhado client_id=%s bytes=%d', sender.hex(), len(payload))
         except (ConnectionError, OSError, TimeoutError):
-            peer.writer.close()
+            peer.writer.transport.abort()
             await self.send_control(session, Kind.ERROR, b'destinatario indisponivel')
 
     async def handle(self, reader, writer):
+        if self.closing:
+            writer.transport.abort()
+            return
         if len(self.connections) >= self.max_clients:
             writer.close()
             await writer.wait_closed()
@@ -143,13 +150,16 @@ class RelayServer:
                     for peer in list(self.sessions.values()):
                         await self.notify(peer, Kind.LEFT, session.client_id)
                     LOG.info('desconectado client_id=%s', session.client_id.hex())
-            self.connections.discard(writer)
             writer.close()
             try:
-                await writer.wait_closed()
+                await asyncio.wait_for(writer.wait_closed(), FRAME_TIMEOUT)
+            except TimeoutError:
+                writer.transport.abort()
             except (ConnectionError, OSError):
                 pass
-            self.tasks.discard(task)
+            finally:
+                self.connections.discard(writer)
+                self.tasks.discard(task)
 
 
 async def run(args):

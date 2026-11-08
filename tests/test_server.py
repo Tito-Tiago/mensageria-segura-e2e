@@ -1,5 +1,6 @@
 import asyncio
 import os
+import socket
 import struct
 import uuid
 
@@ -8,6 +9,7 @@ import pytest_asyncio
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 from src.client.crypto import public_bytes
+from src.client.connection import SecureClient
 from src.client.handshake import verify_welcome
 from src.common.framing import read_frame, write_frame
 from src.common.protocol import Kind, REGISTER, pack, unpack
@@ -72,3 +74,59 @@ async def test_chave_nula_rejeitada(relay):
     await write_frame(writer, pack(Kind.REGISTER, REGISTER.pack(uuid.uuid4().bytes, b'\0' * 32)), asyncio.Lock())
     assert await asyncio.wait_for(reader.read(), 2) == b''
     writer.close()
+
+
+@pytest.mark.parametrize('cenario', ['timeout', 'encerramento', 'framing'])
+async def test_destinatario_sem_leitura_nao_prende_relay(relay, monkeypatch, cenario):
+    import src.common.framing as framing
+    import src.server.main as relay_module
+
+    # Reduz os prazos de I/O para tornar a regressão rápida.
+    monkeypatch.setattr(framing, 'FRAME_TIMEOUT', 0.5)
+    monkeypatch.setattr(relay_module, 'FRAME_TIMEOUT', 0.5)
+    server, port = relay
+    sender = SecureClient()
+    other = SecureClient()
+    slow_id = uuid.uuid4().bytes
+    slow = socket.socket()
+    slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    slow.setblocking(False)
+    try:
+        await sender.connect('127.0.0.1', port, server.identity.certificate)
+        loop = asyncio.get_running_loop()
+        await loop.sock_connect(slow, ('127.0.0.1', port))
+        body = pack(Kind.REGISTER, REGISTER.pack(slow_id, public_bytes(X25519PrivateKey.generate())))
+        await loop.sock_sendall(slow, struct.pack('!I', len(body)) + body)
+        # O socket registra, mas nunca lê WELCOME, controles ou mensagens.
+        await sender.wait_for_peer(slow_id)
+        session = server.sessions[slow_id]
+        session.writer.get_extra_info('socket').setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        for _ in range(100):
+            await sender.send_message(slow_id, 'x' * 4096)
+        async with asyncio.timeout(3):
+            while session.writer.transport.get_write_buffer_size() <= 65536:
+                await asyncio.sleep(0.001)
+
+        if cenario == 'encerramento':
+            await asyncio.wait_for(server.close(), 2)
+            assert not server.sessions and not server.connections and not server.tasks
+        else:
+            if cenario == 'framing':
+                # O handler deve limitar wait_closed também ao rejeitar um frame,
+                # mesmo que ainda haja dados de saída bloqueados pelo destinatário.
+                await loop.sock_sendall(slow, struct.pack('!I', 0xffffffff))
+            async with asyncio.timeout(3):
+                while slow_id in server.sessions or session.writer in server.connections:
+                    await asyncio.sleep(0.01)
+            assert not sender.closed.is_set()
+            await other.connect('127.0.0.1', port, server.identity.certificate)
+            await sender.wait_for_peer(other.client_id)
+            await other.wait_for_peer(sender.client_id)
+            await sender.send_message(other.client_id, 'relay operacional')
+            assert (await other.receive_message()).text == 'relay operacional'
+    finally:
+        slow.close()
+        for writer in list(server.connections):
+            writer.transport.abort()
+        await sender.close()
+        await other.close()
