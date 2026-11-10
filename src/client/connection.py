@@ -114,14 +114,35 @@ class SecureClient:
                 text = plaintext.decode('utf-8')
             except UnicodeDecodeError as exc:
                 raise ProtocolError('texto UTF-8 inválido') from exc
-            if self.messages.full():
-                # Não bloquear a leitura de controles: encerra sessão sobrecarregada.
-                raise ProtocolError('fila de mensagens cheia')
-            self.messages.put_nowait(ReceivedMessage(sender, text))
         except ProtocolError as exc:
-            if str(exc) == 'fila de mensagens cheia':
-                raise
             self.event('rejected', str(exc))
+            return
+
+        # Mensagem inválida é descartada acima; sobrecarga encerra a conexão.
+        if self.messages.full():
+            raise ProtocolError('fila de mensagens cheia')
+        self.messages.put_nowait(ReceivedMessage(sender, text))
+
+    def accept_control(self, kind, payload):
+        """Autentica o controle antes de alterar o diretório e seu contador."""
+        if kind not in (Kind.PEER, Kind.LEFT, Kind.ERROR):
+            raise ProtocolError('controle inesperado')
+        seq, data = verify_control(self.server_key, kind, payload, self.client_id,
+                                   self.context, self.seq_control_recv)
+        if kind == Kind.PEER:
+            if len(data) != PEER_INFO.size:
+                raise ProtocolError('anúncio de peer inválido')
+            peer, public, salt = PEER_INFO.unpack(data)
+            self.directory.install(peer, public, salt)
+            self.event('joined', peer)
+        elif kind == Kind.LEFT:
+            validate_id(data)
+            self.directory.remove(data)
+            self.event('left', data)
+        else:
+            # Erros administrativos são códigos fixos, não conteúdo da conversa.
+            self.event('error', 'destinatário indisponível')
+        self.seq_control_recv = seq
 
     async def receive_loop(self, reader):
         try:
@@ -129,25 +150,8 @@ class SecureClient:
                 kind, payload = unpack(await read_frame(reader))
                 if kind == Kind.E2E:
                     self.accept_e2e(payload)
-                    continue
-                if kind not in (Kind.PEER, Kind.LEFT, Kind.ERROR):
-                    raise ProtocolError('controle inesperado')
-                seq, data = verify_control(self.server_key, kind, payload, self.client_id,
-                                           self.context, self.seq_control_recv)
-                if kind == Kind.PEER:
-                    if len(data) != PEER_INFO.size:
-                        raise ProtocolError('anúncio de peer inválido')
-                    peer, public, salt = PEER_INFO.unpack(data)
-                    self.directory.install(peer, public, salt)
-                    self.event('joined', peer)
-                elif kind == Kind.LEFT:
-                    validate_id(data)
-                    self.directory.remove(data)
-                    self.event('left', data)
                 else:
-                    # Erros administrativos são códigos fixos, não conteúdo da conversa.
-                    self.event('error', 'destinatário indisponível')
-                self.seq_control_recv = seq
+                    self.accept_control(kind, payload)
         except asyncio.IncompleteReadError:
             self.event('closed', 'servidor desconectado')
         except (ProtocolError, ConnectionError, OSError, TimeoutError) as exc:

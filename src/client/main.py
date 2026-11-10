@@ -45,6 +45,53 @@ async def display_events(client):
             print(f'\nAviso: {value}', flush=True)
 
 
+async def read_terminal_line(stdin, disconnected):
+    """Espera uma linha ou a queda do servidor, sem deixar leitura pendente."""
+    line_task = asyncio.create_task(stdin.readline())
+    try:
+        done, _ = await asyncio.wait(
+            [line_task, disconnected], return_when=asyncio.FIRST_COMPLETED)
+        if disconnected in done:
+            return None
+        raw = line_task.result()
+        return raw.decode('utf-8').rstrip('\r\n') if raw else None
+    finally:
+        if not line_task.done():
+            line_task.cancel()
+            await asyncio.gather(line_task, return_exceptions=True)
+
+
+async def execute_command(client, line, selected):
+    """Executa uma linha e devolve o destinatário selecionado para a próxima."""
+    if line == '/help':
+        print(HELP)
+    elif line == '/id':
+        print(uuid.UUID(bytes=client.client_id))
+    elif line == '/peers':
+        if not client.peers:
+            print('Nenhum outro cliente conectado.')
+        for index, peer in enumerate(sorted(client.peers), 1):
+            print(f'{index}: {uuid.UUID(bytes=peer)}')
+    elif line.startswith('/to '):
+        selected = select_peer(client, line[4:].strip())
+        print(f'Destinatário: {uuid.UUID(bytes=selected)}')
+    elif line.startswith('/send '):
+        parts = line.split(' ', 2)
+        if len(parts) != 3:
+            raise ProtocolError('use /send NUMERO_OU_UUID TEXTO')
+        target = select_peer(client, parts[1])
+        await client.send_message(target, parts[2])
+        print('Mensagem enviada.')
+    elif line.startswith('/'):
+        raise ProtocolError('comando desconhecido; use /help')
+    elif line:
+        if selected is None:
+            raise ProtocolError('escolha destinatário com /to ou use /send')
+        await client.send_message(selected, line)
+        print('Mensagem enviada.')
+    return selected
+
+
 async def run(args):
     client_id = uuid.UUID(args.id).bytes if args.id else None
     client = SecureClient(client_id)
@@ -57,54 +104,17 @@ async def run(args):
         stdin = asyncio.StreamReader()
         transport, _ = await asyncio.get_running_loop().connect_read_pipe(
             lambda: asyncio.StreamReaderProtocol(stdin), sys.stdin)
-        tasks = [asyncio.create_task(display_messages(client)), asyncio.create_task(display_events(client))]
         disconnected = asyncio.create_task(client.closed.wait())
-        tasks.append(disconnected)
+        tasks = [asyncio.create_task(display_messages(client)),
+                 asyncio.create_task(display_events(client)), disconnected]
         selected = None
         while not client.closed.is_set():
             print('> ', end='', flush=True)
-            line_task = asyncio.create_task(stdin.readline())
-            try:
-                done, _ = await asyncio.wait([line_task, disconnected], return_when=asyncio.FIRST_COMPLETED)
-                if disconnected in done:
-                    break
-                raw = line_task.result()
-            finally:
-                if not line_task.done():
-                    line_task.cancel()
-                    await asyncio.gather(line_task, return_exceptions=True)
-            if not raw:
+            line = await read_terminal_line(stdin, disconnected)
+            if line is None or line == '/quit':
                 break
-            line = raw.decode('utf-8').rstrip('\r\n')
             try:
-                if line == '/quit':
-                    break
-                if line == '/help':
-                    print(HELP)
-                elif line == '/id':
-                    print(uuid.UUID(bytes=client.client_id))
-                elif line == '/peers':
-                    if not client.peers:
-                        print('Nenhum outro cliente conectado.')
-                    for index, peer in enumerate(sorted(client.peers), 1):
-                        print(f'{index}: {uuid.UUID(bytes=peer)}')
-                elif line.startswith('/to '):
-                    selected = select_peer(client, line[4:].strip())
-                    print(f'Destinatário: {uuid.UUID(bytes=selected)}')
-                elif line.startswith('/send '):
-                    parts = line.split(' ', 2)
-                    if len(parts) != 3:
-                        raise ProtocolError('use /send NUMERO_OU_UUID TEXTO')
-                    target = select_peer(client, parts[1])
-                    await client.send_message(target, parts[2])
-                    print('Mensagem enviada.')
-                elif line.startswith('/'):
-                    raise ProtocolError('comando desconhecido; use /help')
-                elif line:
-                    if selected is None:
-                        raise ProtocolError('escolha destinatário com /to ou use /send')
-                    await client.send_message(selected, line)
-                    print('Mensagem enviada.')
+                selected = await execute_command(client, line, selected)
             except (ProtocolError, ConnectionError, OSError, TimeoutError) as exc:
                 reason = str(exc) if isinstance(exc, ProtocolError) else 'falha de conexão'
                 print(f'Aviso: {reason}', flush=True)

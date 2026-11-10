@@ -16,8 +16,8 @@ A gera uma chave privada X25519 e publica a correspondente chave pública. B faz
 | 4 | [crypto.py](../src/client/crypto.py) | `PeerCipher.encrypt_message` | Reserva de contador, nonce, AAD e AES-GCM |
 | 5 | [protocol.py](../src/common/protocol.py) | `E2E_HEADER`, `parse_e2e`, `aad` | Campos e validações públicas do frame |
 | 6 | [crypto.py](../src/client/crypto.py) | `PeerCipher.decrypt_message` | Anti-replay, tag e atualização segura de estado |
-| 7 | [connection.py](../src/client/connection.py) | `send_message`, `accept_e2e`, `receive_loop`, `close` | Integração da rede e da criptografia |
-| 8 | [main.py do cliente](../src/client/main.py) | `run`, `select_peer`, `display_messages` | Comandos e entrada/saída simultâneas |
+| 7 | [connection.py](../src/client/connection.py) | `send_message`, `accept_e2e`, `accept_control`, `receive_loop`, `close` | Integração da rede e da criptografia |
+| 8 | [main.py do cliente](../src/client/main.py) | `run`, `read_terminal_line`, `execute_command`, `select_peer`, `display_messages` | Comandos e entrada/saída simultâneas |
 | 9 | [demonstrar_falhas.py](../scripts/demonstrar_falhas.py) | `demo` | Frames adulterados/repetidos apenas em memória |
 
 ## Como A e B concordam nas direções

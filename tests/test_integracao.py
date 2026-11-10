@@ -155,3 +155,15 @@ async def test_logs_sem_segredos_ou_conteudo(system, caplog):
                  server.sessions[a.client_id].salt.hex()]
     assert all(value not in caplog.text for value in forbidden)
     assert 'encaminhado' in caplog.text
+
+
+async def test_fila_cheia_encerra_cliente_sem_bloquear_relay(system):
+    _, connect = system
+    a, b = await pair(connect)
+    b.messages = asyncio.Queue(maxsize=1)
+    await a.send_message(b.client_id, 'primeira')
+    await a.send_message(b.client_id, 'segunda')
+    await asyncio.wait_for(b.closed.wait(), 3)
+    assert await event(b, 'closed') == 'fila de mensagens cheia'
+    assert (await b.receive_message()).text == 'primeira'
+    assert not a.closed.is_set()

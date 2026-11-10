@@ -48,7 +48,11 @@ async def test_cli_envia_recebe_lista_e_sai(cli_system):
         assert (await peer.receive_message()).text == 'resposta do terminal'
         await peer.send_message(cid, 'recebida no terminal')
         await asyncio.wait_for(proc.stdout.readuntil(b'recebida no terminal'), 5)
-        proc.stdin.write(b'/peers\n/id\n/quit\n')
+        proc.stdin.write(b'/to 1\nmensagem ao selecionado\n/send\n/to 99\ncontinua no selecionado\n')
+        await proc.stdin.drain()
+        assert (await peer.receive_message()).text == 'mensagem ao selecionado'
+        assert (await peer.receive_message()).text == 'continua no selecionado'
+        proc.stdin.write(b'/help\n/peers\n/id\n/quit\n')
         await proc.stdin.drain()
         out, err = await asyncio.wait_for(proc.communicate(), 5)
         assert str(uuid.UUID(bytes=peer.client_id)).encode() in out
